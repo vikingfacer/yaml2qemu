@@ -1,0 +1,32 @@
+arch: x86_64
+machine:
+  type: q35
+  name: tiny-horse
+  cpu: max
+  smp: 2
+  memory: 512M
+  accel: auto
+  nodefaults: true
+display: none
+serial: mon:stdio
+
+kernel:
+  image: ../build/tmp/deploy/images/qemux86-64/bzImage
+  cmdline: root=/dev/vda rw console=ttyS0
+
+disks:
+  - file: ../build/tmp/deploy/images/qemux86-64/tiny-horse-image-qemux86-64.rootfs.ext4
+    format: raw
+    interface: virtio
+    cache: writeback
+
+networks:
+  - type: user
+    id: net0
+    model: virtio-net-pci
+    hostfwd:
+      - tcp:127.0.0.1:2222-:22
+      - tcp:127.0.0.1:8000-:8000
+
+extra_args:
+  - -no-reboot
