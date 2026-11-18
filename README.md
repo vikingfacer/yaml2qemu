@@ -1,6 +1,6 @@
 # yaml2qemu
 
-[![CI](https://github.com/vikingfacer/yaml2qemu/actions/workflows/ci.yml/badge.svg)](https://github.com/vikingfacer/yaml2qemu/actions/workflows/ci.yml)
+[![CI](https://github.com/vikingfacer/yaml2qemu/actions/workflows/ci.yml/badge.svg)](https://github.com/vikingfacer/yaml2qemu/actions/workflows/ci.yml) ![pipx](https://img.shields.io/badge/pipx-%232CFFAA.svg?style=for-the-badge&logo=pipx&logoColor=black) ![Nx](https://img.shields.io/badge/nx-%23143055.svg?style=for-the-badge&logo=nx&logoColor=white) ![Python](https://img.shields.io/badge/python-%233670A0.svg?style=for-the-badge&logo=python&logoColor=ffdd54)
 
 QEMU-system commands are hard to edit, yaml is easier. Why not describe qemu system in yaml?
 
