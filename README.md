@@ -80,4 +80,4 @@ python -m build
 
 ## License
 
-TBD
+Licensed under the [MIT License](LICENSE).
