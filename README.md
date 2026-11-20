@@ -38,7 +38,8 @@ By default the generated command is executed.
 - `--verbose` — show the command before it runs.
 
 Unknown keys are rejected so typos fail loudly; anything the grammar does
-not cover can be passed through with `extra_args`.
+not cover can be passed through with `extra_args`. Optional `setup` and
+`teardown` lists run commands before QEMU starts and after it exits.
 
 ## Installation
 

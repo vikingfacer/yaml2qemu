@@ -47,6 +47,8 @@ TOP_LEVEL_KEYS = {
     "serial",
     "monitor",
     "extra_args",
+    "setup",
+    "teardown",
 }
 
 MACHINE_KEYS = {
@@ -123,6 +125,10 @@ example configuration:
   serial: mon:stdio
   extra_args:
     - -no-reboot
+  setup:
+    - ip link add name br0 type bridge
+  teardown:
+    - ip link del name br0
 
 see docs/schema.md for the full grammar
 """
@@ -425,11 +431,69 @@ def extra_args(cfg: dict) -> list:
     return [str(extra) for extra in as_list(extras, "extra_args")]
 
 
+def script_commands(text: str, where: str) -> list:
+    """Split a shell-like string into one argv list per non-blank line."""
+    commands = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            commands.append(shlex.split(line))
+        except ValueError as error:
+            fail(f"{where}: invalid shell quoting: {error}")
+    if not commands:
+        fail(f"{where} must not be empty")
+    return commands
+
+
+def command_args(value, where: str) -> list:
+    """Return a list of commands, each as an argv list.
+
+    A command is either a shell-like string or a list of arguments. Strings
+    may span multiple lines; every non-blank line is a separate command.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        fail(f"{where} must be a list of commands")
+
+    commands = []
+    for index, item in enumerate(value):
+        item_where = f"{where}[{index}]"
+        if isinstance(item, str):
+            commands += script_commands(item, item_where)
+        elif isinstance(item, list):
+            parts = [str(part) for part in item]
+            if not parts:
+                fail(f"{item_where} must not be empty")
+            commands.append(parts)
+        else:
+            fail(f"{item_where} must be a string or a list")
+    return commands
+
+
+def setup_commands(cfg: dict) -> list:
+    """Return the setup commands to run before QEMU."""
+    return command_args(cfg.get("setup"), "setup")
+
+
+def teardown_commands(cfg: dict) -> list:
+    """Return the teardown commands to run after QEMU."""
+    return command_args(cfg.get("teardown"), "teardown")
+
+
 def build_command(cfg: dict) -> list:
     """Translate a full configuration mapping into a QEMU command."""
     if not isinstance(cfg, dict):
         fail("configuration must be a mapping")
     check_keys(cfg, TOP_LEVEL_KEYS, "configuration")
+
+    for key in ("setup", "teardown"):
+        if key in cfg:
+            command_args(cfg[key], key)
 
     sections = [
         ({"machine"}, machine_args),
@@ -505,6 +569,28 @@ def execute(command: list) -> int:
         return 127
 
 
+def run_commands(commands: list, label: str) -> int:
+    """Run each command in order, stopping at the first failure."""
+    for command in commands:
+        try:
+            status = subprocess.run(command).returncode
+        except KeyboardInterrupt:
+            return 130
+        except OSError as error:
+            print(
+                f"{PROG}: error: cannot run '{command[0]}': {error}", file=sys.stderr
+            )
+            return 127
+        if status != 0:
+            print(
+                f"{PROG}: error: {label} command failed with status "
+                f"{status}: {shlex.join(command)}",
+                file=sys.stderr,
+            )
+            return status
+    return 0
+
+
 def main(argv=None) -> int:
     """Run the CLI and return the process exit status."""
     options = make_parser().parse_args(argv)
@@ -512,6 +598,8 @@ def main(argv=None) -> int:
     try:
         cfg = load_config(options.config)
         command = build_command(cfg)
+        setup = setup_commands(cfg)
+        teardown = teardown_commands(cfg)
     except (ConfigError, OSError) as error:
         print(f"{PROG}: error: {error}", file=sys.stderr)
         return 2
@@ -523,12 +611,22 @@ def main(argv=None) -> int:
         print(f"{PROG}: configuration OK", file=sys.stderr)
         return 0
 
-    if not options.print_command:
-        if options.verbose:
-            print(shlex.join(command), file=sys.stderr)
-        return execute(command)
+    if options.print_command:
+        return 0
 
-    return 0
+    if options.verbose:
+        for step in setup:
+            print(f"setup: {shlex.join(step)}", file=sys.stderr)
+        print(shlex.join(command), file=sys.stderr)
+
+    status = run_commands(setup, "setup")
+    if status == 0:
+        status = execute(command)
+
+    teardown_status = run_commands(teardown, "teardown")
+    if status == 0:
+        status = teardown_status
+    return status
 
 
 if __name__ == "__main__":

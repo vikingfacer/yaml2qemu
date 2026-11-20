@@ -536,6 +536,75 @@ def test_extra_args():
     assert options({}) == []
 
 
+def test_lifecycle_command_forms():
+    cfg = {
+        "setup": ["echo 'two words'", ["echo", "list"]],
+        "teardown": "echo bye",
+    }
+    assert yaml2qemu.setup_commands(cfg) == [
+        ["echo", "two words"],
+        ["echo", "list"],
+    ]
+    assert yaml2qemu.teardown_commands(cfg) == [["echo", "bye"]]
+    assert yaml2qemu.setup_commands({}) == []
+    assert yaml2qemu.teardown_commands({}) == []
+
+
+def test_lifecycle_multiline_string():
+    cfg = {
+        "setup": """
+            ip link add name br0 type bridge
+            ip link set br0 up
+
+            echo done
+        """,
+        "teardown": "echo one\necho two\n",
+    }
+    assert yaml2qemu.setup_commands(cfg) == [
+        ["ip", "link", "add", "name", "br0", "type", "bridge"],
+        ["ip", "link", "set", "br0", "up"],
+        ["echo", "done"],
+    ]
+    assert yaml2qemu.teardown_commands(cfg) == [
+        ["echo", "one"],
+        ["echo", "two"],
+    ]
+
+
+def test_lifecycle_invalid_quoting():
+    with pytest.raises(
+        yaml2qemu.ConfigError, match="setup\\[0\\]: invalid shell quoting"
+    ):
+        build({"setup": ["echo 'unbalanced"]})
+
+
+@pytest.mark.parametrize("key", ["setup", "teardown"])
+def test_lifecycle_must_be_a_list(key):
+    with pytest.raises(
+        yaml2qemu.ConfigError, match=f"{key} must be a list of commands"
+    ):
+        build({key: 5})
+
+
+@pytest.mark.parametrize("key", ["setup", "teardown"])
+def test_lifecycle_command_must_be_string_or_list(key):
+    with pytest.raises(
+        yaml2qemu.ConfigError, match=rf"{key}\[0\] must be a string or a list"
+    ):
+        build({key: [5]})
+
+
+@pytest.mark.parametrize("key", ["setup", "teardown"])
+def test_lifecycle_command_must_not_be_empty(key):
+    with pytest.raises(yaml2qemu.ConfigError, match=rf"{key}\[0\] must not be empty"):
+        build({key: [""]})
+
+
+def test_lifecycle_commands_are_not_qemu_args():
+    cfg = {"setup": ["echo hi"], "teardown": ["echo bye"]}
+    assert options(cfg) == []
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [(True, "on"), (False, "off"), (5, "5"), ("x", "x")],
@@ -674,6 +743,96 @@ def test_cli_run_returns_exit_code(monkeypatch, tmp_path, capsys):
     assert rc == 1
     assert out == ""
     assert err == ""
+
+
+def test_cli_setup_and_teardown_run_around_qemu(monkeypatch, tmp_path, capsys):
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(yaml2qemu.subprocess, "run", fake_run)
+    cfg = {
+        "binary": "qemu",
+        "setup": ["echo one", ["echo", "two"]],
+        "teardown": "echo bye",
+    }
+    path = write_config(tmp_path, cfg)
+    rc, out, err = run_cli([str(path)], capsys)
+    assert rc == 0
+    assert out == ""
+    assert err == ""
+    assert calls == [
+        ["echo", "one"],
+        ["echo", "two"],
+        ["qemu"],
+        ["echo", "bye"],
+    ]
+
+
+def test_cli_setup_failure_skips_qemu_but_runs_teardown(
+    monkeypatch, tmp_path, capsys
+):
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+        return SimpleNamespace(returncode=3 if command == ["false"] else 0)
+
+    monkeypatch.setattr(yaml2qemu.subprocess, "run", fake_run)
+    cfg = {
+        "binary": "qemu",
+        "setup": [["false"], "echo never"],
+        "teardown": "echo cleanup",
+    }
+    path = write_config(tmp_path, cfg)
+    rc, out, err = run_cli([str(path)], capsys)
+    assert rc == 3
+    assert calls == [["false"], ["echo", "cleanup"]]
+    assert "setup command failed with status 3: false" in err
+
+
+def test_cli_qemu_failure_still_runs_teardown(monkeypatch, tmp_path, capsys):
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+        return SimpleNamespace(returncode=1 if command == ["qemu"] else 2)
+
+    monkeypatch.setattr(yaml2qemu.subprocess, "run", fake_run)
+    cfg = {"binary": "qemu", "teardown": "echo cleanup"}
+    path = write_config(tmp_path, cfg)
+    rc, out, err = run_cli([str(path)], capsys)
+    assert rc == 1
+    assert calls == [["qemu"], ["echo", "cleanup"]]
+    assert "teardown command failed with status 2" in err
+
+
+def test_cli_print_does_not_run_lifecycle(monkeypatch, tmp_path, capsys):
+    def unexpected(command):
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(yaml2qemu.subprocess, "run", unexpected)
+    cfg = {"binary": "qemu", "setup": ["echo hi"], "teardown": ["echo bye"]}
+    path = write_config(tmp_path, cfg)
+    rc, out, err = run_cli(["-p", str(path)], capsys)
+    assert rc == 0
+    assert out == "qemu\n"
+    assert err == ""
+
+
+def test_cli_check_does_not_run_lifecycle(monkeypatch, tmp_path, capsys):
+    def unexpected(command):
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(yaml2qemu.subprocess, "run", unexpected)
+    cfg = {"setup": ["echo hi"], "teardown": ["echo bye"]}
+    path = write_config(tmp_path, cfg)
+    rc, out, err = run_cli(["--check", str(path)], capsys)
+    assert rc == 0
+    assert out == ""
+    assert err == "yaml2qemu: configuration OK\n"
 
 
 def test_cli_keyboard_interrupt(monkeypatch, tmp_path, capsys):

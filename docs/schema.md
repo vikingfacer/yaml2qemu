@@ -1,9 +1,10 @@
 # YAML grammar
 
 `yaml2qemu` reads a single YAML mapping and turns it into a QEMU command
-line. Unknown keys are rejected so typos fail loudly. The MVP covers five
-sections: machine, kernel, disks, networks, and console. Anything not
-covered can be passed through with `extra_args`.
+line. Unknown keys are rejected so typos fail loudly. The grammar covers
+machine, kernel, disks, networks, and console settings, plus optional
+`setup`/`teardown` commands run around QEMU. Anything not covered can be
+passed through with `extra_args`.
 
 ```yaml
 arch: x86_64
@@ -47,6 +48,12 @@ monitor: stdio
 
 extra_args:
   - -no-reboot
+
+setup:
+  - ip link add name br0 type bridge
+  - ip link set br0 up
+teardown:
+  - ip link del name br0
 ```
 
 ## Top level
@@ -63,6 +70,8 @@ extra_args:
 | `serial`     | bool or string    | *(omitted)*            | `-serial`          | `true` = `mon:stdio`. |
 | `monitor`    | bool or string    | *(omitted)*            | `-monitor`         | `true` = `stdio`. |
 | `extra_args` | list or string    | `[]`                   | appended verbatim  | Escape hatch for anything else. |
+| `setup`      | list or string    | `[]`                   | run before QEMU    | Commands to run before starting QEMU. |
+| `teardown`   | list or string    | `[]`                   | run after QEMU     | Commands to run after QEMU exits. |
 
 ### Architectures
 
@@ -189,3 +198,28 @@ to QEMU unchanged. Use this for options the grammar does not cover.
 ```yaml
 extra_args: -no-reboot -snapshot
 ```
+
+## `setup` and `teardown`
+
+Optional lists of commands to run before QEMU starts and after it exits.
+Each entry is either a shell-like string or a list of arguments. A string
+may span multiple lines; every non-blank line is treated as a separate
+command:
+
+```yaml
+setup:
+  - ip link add name br0 type bridge
+  - [ip, link, set, br0, up]
+  - |
+    ip link add name br1 type bridge
+    ip link set br1 up
+teardown:
+  - ip link del name br0
+  - ip link del name br1
+```
+
+`setup` commands run in order. If one fails, the remaining setup commands
+and QEMU are skipped, and `teardown` still runs. `teardown` commands always
+run after QEMU exits, including when QEMU fails or is interrupted. A failing
+teardown sets the exit status only if QEMU itself succeeded. `--print` and
+`--check` validate these sections but do not run them.
